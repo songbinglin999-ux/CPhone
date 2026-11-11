@@ -73,6 +73,43 @@ public final class UntilCheck {
         }
     }
 
+    /** 应用别名或包名 → 中文名；不认识返回 null。美团外卖不会被收成美团。 */
+    public static String displayName(String nameOrPkg) {
+        if (nameOrPkg == null) return null;
+        switch (nameOrPkg.trim().toLowerCase()) {
+            case "微信": case "wechat": case "com.tencent.mm": return "微信";
+            case "淘宝": case "taobao": case "com.taobao.taobao": return "淘宝";
+            case "闲鱼": case "xianyu": case "com.taobao.idlefish": return "闲鱼";
+            case "支付宝": case "alipay": case "com.eg.android.alipaygphone": return "支付宝";
+            case "美团外卖": case "meituanwaimai": case "com.sankuai.meituan.takeoutnew": return "美团外卖";
+            case "美团": case "meituan": case "com.sankuai.meituan": return "美团";
+            default: return null;
+        }
+    }
+
+    /** 一句话里点到的允许应用，长名字优先（美团外卖不会再拆出美团）。 */
+    public static java.util.List<String> mentionedApps(String text) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (text == null || text.isEmpty()) return out;
+        String left = text;
+        String lower = text.toLowerCase();
+        if (left.contains("美团外卖") || lower.contains("meituanwaimai")) {
+            out.add("美团外卖");
+            left = left.replace("美团外卖", " ");
+            lower = lower.replace("meituanwaimai", " ");
+        }
+        take(out, left, lower, "微信", "wechat");
+        take(out, left, lower, "淘宝", "taobao");
+        take(out, left, lower, "闲鱼", "xianyu");
+        take(out, left, lower, "支付宝", "alipay");
+        take(out, left, lower, "美团", "meituan");
+        return out;
+    }
+
+    private static void take(java.util.List<String> out, String raw, String lower, String zh, String en) {
+        if ((raw.contains(zh) || lower.contains(en)) && !out.contains(zh)) out.add(zh);
+    }
+
     private static boolean contains(String s, String nq) {
         return s != null && s.toLowerCase().contains(nq);
     }

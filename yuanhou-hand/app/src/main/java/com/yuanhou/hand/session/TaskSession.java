@@ -9,11 +9,17 @@ import com.yuanhou.hand.gate.IrrevAction;
 import com.yuanhou.hand.gate.IrreversibleDetector;
 import com.yuanhou.hand.hand.HandExecutor;
 import com.yuanhou.hand.hand.SuiteState;
+import com.yuanhou.hand.memory.DoneGate;
+import com.yuanhou.hand.memory.GoalCheck;
+import com.yuanhou.hand.memory.Playbook;
+import com.yuanhou.hand.memory.Sensitive;
+import com.yuanhou.hand.memory.StepHistory;
 import com.yuanhou.hand.model.BatchPlan;
 import com.yuanhou.hand.model.ModelAction;
 import com.yuanhou.hand.model.ModelClient;
 import com.yuanhou.hand.model.ModelConfig;
 import com.yuanhou.hand.policy.ConfirmationPolicy;
+import com.yuanhou.hand.policy.InterruptionGuard;
 import com.yuanhou.hand.policy.OperationGuard;
 import com.yuanhou.hand.policy.SafetyGuard;
 import com.yuanhou.hand.policy.UntilCheck;
@@ -27,6 +33,7 @@ import com.yuanhou.hand.screen.ScreenSnapshot;
 import com.yuanhou.hand.util.AppLog;
 import com.yuanhou.hand.util.Timing;
 
+import java.io.File;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -722,120 +729,350 @@ public final class TaskSession implements CallChannel.Listener {
     private void modelLoop(String intent, ModelConfig cfg) throws InterruptedException {
         ModelClient mc = new ModelClient(cfg);
         ScreenPort port = port();
-        StringBuilder hist = new StringBuilder();
+        StepHistory hist = new StepHistory();
+        Playbook book = openPlaybook();
         SuiteState s = host.suite();
         OperationGuard guard = new OperationGuard();
+        InterruptionGuard interruptions = new InterruptionGuard();
         gate.reset();
         String pendingHint = null;
         int budget = stepBudget();
-        for (int step = 1; step <= budget; step++) {
-            this.step = step;
-            if (cancelled) { end(End.CANCELLED, null); return; }
-            if (!requireSuite()) { end(End.NOT_READY, null); return; }
+        try {
+            for (int step = 1; step <= budget; step++) {
+                this.step = step;
+                if (cancelled) { end(End.CANCELLED, null); return; }
+                if (!requireSuite()) { end(End.NOT_READY, null); return; }
 
-            phase(Phase.OBSERVING, "第 " + step + " 步：看屏幕");
-            ScreenSnapshot snap = settledSnapshot(step > 1);
-            if (snap != null) {
-                SafetyGuard.Verdict v = SafetyGuard.check(snap);
-                if (v.stop()) {
-                    say("停下了：" + v.reason + "。这一步需要你本人处理，我不会继续自动输入。");
-                    end(End.NEEDS_HUMAN, v.reason);
+                phase(Phase.OBSERVING, "第 " + step + " 步：看屏幕");
+                ScreenSnapshot snap = settledSnapshot(step > 1);
+                if (snap != null) {
+                    snap = settleScreen(step, snap, port, s, hist, book, intent, interruptions);
+                    if (snap == null) return;
+                }
+                OperationGuard.Verdict gv = guard.onScreen(SafetyGuard.isBlank(snap) ? null : snap.fingerprint(), step > 1);
+                if (gv != null && gv.stop) { stopByGuard(gv); return; }
+                if (gv != null) pendingHint = gv.message;
+
+                String jpeg = null;
+                if (cfg.vision && ScreenCapture.available()) {
+                    Bitmap b = ScreenCapture.capture(host.context(), s.screenW, s.screenH, 320);
+                    jpeg = ScreenCapture.toJpegBase64(b, 720);
+                }
+                if (snap == null && jpeg == null) {
+                    say("看不到屏幕：只读无障碍没开，也没有可用的截图。先停下，不猜坐标。");
+                    end(End.BLIND, null);
                     return;
                 }
-            }
-            OperationGuard.Verdict gv = guard.onScreen(SafetyGuard.isBlank(snap) ? null : snap.fingerprint(), step > 1);
-            if (gv != null && gv.stop) { stopByGuard(gv); return; }
-            if (gv != null) pendingHint = gv.message;
+                if (cancelled) { end(End.CANCELLED, null); return; }
 
-            String jpeg = null;
-            if (cfg.vision && ScreenCapture.available()) {
-                Bitmap b = ScreenCapture.capture(host.context(), s.screenW, s.screenH, 320);
-                jpeg = ScreenCapture.toJpegBase64(b, 720);
-            }
-            if (snap == null && jpeg == null) {
-                say("看不到屏幕：只读无障碍没开，也没有可用的截图。先停下，不猜坐标。");
-                end(End.BLIND, null);
-                return;
-            }
-            if (cancelled) { end(End.CANCELLED, null); return; }
+                phase(Phase.DECIDING, "第 " + step + " 步：问模型");
+                if (pendingHint != null) {
+                    hist.note(step, "提醒：" + pendingHint);
+                    pendingHint = null;
+                }
+                if (budget != UNLIMITED_STEPS && budget >= 10 && (step == budget / 2 || step == (budget * 3) / 4)) {
+                    hist.note(step, "提醒：已用 " + step + "/" + budget + " 步。");
+                }
+                String prior = book.relevant(intent, snap == null ? "" : snap.packageName);
+                ModelAction a = mc.nextAction(intent, hist.forModel(),
+                        snap == null ? null : snap.toModelText(MainScreenEsp32Port.MAX_REFS), jpeg, prior);
+                AppLog.i("模型第 " + step + " 步: " + a.type
+                        + ("do_steps".equals(a.type) && a.steps != null ? " ×" + a.steps.size() : "")
+                        + (a.ref > 0 ? " ref=" + a.ref : "") + (a.gate != null ? " gate=" + a.gate : ""));
+                if (cancelled) { end(End.CANCELLED, null); return; }
 
-            phase(Phase.DECIDING, "第 " + step + " 步：问模型");
-            if (pendingHint != null) {
-                hist.append("提醒：").append(pendingHint).append('\n');
-                pendingHint = null;
-            }
-            if (budget != UNLIMITED_STEPS && budget >= 10 && (step == budget / 2 || step == (budget * 3) / 4)) {
-                hist.append("提醒：已用 ").append(step).append("/").append(budget).append(" 步。\n");
-            }
-            pruneHist(hist);
-            ModelAction a = mc.nextAction(intent, hist.toString(),
-                    snap == null ? null : snap.toModelText(MainScreenEsp32Port.MAX_REFS), jpeg);
-            AppLog.i("模型第 " + step + " 步: " + a.type
-                    + ("do_steps".equals(a.type) && a.steps != null ? " ×" + a.steps.size() : "")
-                    + (a.ref > 0 ? " ref=" + a.ref : "") + (a.gate != null ? " gate=" + a.gate : ""));
-            if (cancelled) { end(End.CANCELLED, null); return; }
-
-            if ("done".equals(a.type)) {
-                say(a.say.isEmpty() ? "办完了。" : a.say);
-                end(End.DONE, null);
-                return;
-            }
-            if ("do_steps".equals(a.type)) {
-                String bad = BatchPlan.validate(a);
-                if (bad != null) {
-                    hist.append("一次多步无效：").append(bad).append("，没有执行。请改成合法的 steps 或改回单步。\n");
+                if ("done".equals(a.type)) {
+                    if (acceptDone(mc, intent, hist, snap, a)) return;
                     continue;
                 }
-                String[] hint = new String[] { pendingHint };
-                if (!runBatch(step, a, snap, port, s, guard, hist, hint)) return;
-                pendingHint = hint[0];
-                if (step % 15 == 0) say("还在办，已经走了 " + step + " 步。");
-                continue;
-            }
-            if (!BatchPlan.KNOWN.contains(a.type)) {
-                say(a.say.isEmpty() ? "先停下。" : a.say);
-                end(End.MODEL_STOP, a.say);
-                return;
-            }
+                if ("goal_check".equals(a.type)) {
+                    hist.note(step, "模型自行返回 goal_check，不能代替本机核对，任务继续。");
+                    continue;
+                }
+                if ("stop".equals(a.type) && DoneGate.decide(a.type, false) == DoneGate.Decision.STOP) {
+                    say(a.say.isEmpty() ? "先停下。" : a.say);
+                    end(End.MODEL_STOP, a.say);
+                    return;
+                }
+                if ("do_steps".equals(a.type)) {
+                    String bad = BatchPlan.validate(a);
+                    if (bad != null) {
+                        hist.note(step, "一次多步无效：" + bad + "，没有执行。请改成合法的 steps 或改回单步。");
+                        continue;
+                    }
+                    String[] hint = new String[] { pendingHint };
+                    if (!runBatch(step, a, snap, port, s, guard, hist, hint, interruptions)) return;
+                    pendingHint = hint[0];
+                    if (step % 15 == 0) say(hist.progressSpeech(step));
+                    continue;
+                }
+                if (!BatchPlan.KNOWN.contains(a.type)) {
+                    say(a.say.isEmpty() ? "先停下。" : a.say);
+                    end(End.MODEL_STOP, a.say);
+                    return;
+                }
 
-            String[] hint = new String[] { pendingHint };
-            String r = runOneAction(step, a, snap, port, s, guard, hist, hint, true);
-            pendingHint = hint[0];
-            if ("ended".equals(r)) return;
-            if (r != null && !"gated".equals(r)) {
-                // 单步找不到目标仍按原规则停任务
-                say(r);
-                end(End.MODEL_STOP, r);
-                return;
+                String[] hint = new String[] { pendingHint };
+                String r = runOneAction(step, a, snap, port, s, guard, hist, hint, true);
+                pendingHint = hint[0];
+                if ("ended".equals(r)) return;
+                if (r != null && !"gated".equals(r)) {
+                    hist.action(step, a.type, targetOf(a, null), appOf(a, snap), "没做成：" + r, screenNote(snap),
+                            step + ". 没做成：" + r);
+                    say(r);
+                    end(End.MODEL_STOP, r);
+                    return;
+                }
+                if (step % 15 == 0) say(hist.progressSpeech(step));
             }
-            if (step % 15 == 0) say("还在办，已经走了 " + step + " 步。");
+            closeout(intent, cfg, mc, hist, s, book, interruptions);
+        } finally {
+            try {
+                book.record(intent, hist, hist.goalVerified(), clearFailure(lastEnd, hist));
+            } catch (Exception e) {
+                AppLog.i("本机记事没写成: " + e.getClass().getSimpleName());
+            }
         }
-        closeout(intent, cfg, mc, hist, s);
     }
 
-    /** 有限步数用尽后再问一轮，只接受 done/stop。 */
-    private void closeout(String intent, ModelConfig cfg, ModelClient mc, StringBuilder hist, SuiteState s)
+    private Playbook openPlaybook() {
+        try {
+            return Playbook.open(new File(host.context().getFilesDir(), "playbook"));
+        } catch (Exception e) {
+            AppLog.i("本机记事读不出: " + e.getClass().getSimpleName());
+            return Playbook.open(null);
+        }
+    }
+
+    /** 明确失败才记进应用经验。取消、本人接手、步数用完都不记成「这条路走不通」。 */
+    private static String clearFailure(End e, StepHistory hist) {
+        if (e == null) return null;
+        switch (e) {
+            case GUARD:
+            case HAND_FAILED:
+            case NOT_FOUND:
+            case VERIFY_FAILED:
+                return e.label;
+            case MODEL_STOP:
+                return hardMiss(hist) ? "这一步没做成" : null;
+            default:
+                return null;
+        }
+    }
+
+    private static boolean hardMiss(StepHistory hist) {
+        if (hist == null) return false;
+        for (StepHistory.Turn t : hist.turns()) {
+            if ("action".equals(t.kind) && t.result != null && t.result.startsWith("没做成")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * done 不能直接结束。先强制一轮目标核对；只有核对明确达成才 DONE。
+     * 没达成就写进步骤并继续。返回 true 表示任务已经结束（办完或取消）。
+     */
+    private boolean acceptDone(ModelClient mc, String intent, StepHistory hist, ScreenSnapshot snap, ModelAction a)
+            throws InterruptedException {
+        if (cancelled) { end(End.CANCELLED, null); return true; }
+        GoalCheck.Verdict v = askGoal(mc, intent, hist, snap);
+        if (cancelled) { end(End.CANCELLED, null); return true; }
+        if (DoneGate.decide("done", v.met) != DoneGate.Decision.ACCEPT) {
+            String why = v.say == null || v.say.isEmpty() ? "目标还没在当前屏幕上得到核对。" : v.say;
+            hist.note(this.step, "目标核对未通过：" + why + "。还不能结束，请对照用户原话继续办，不要重复同一句 done。");
+            return false;
+        }
+        hist.markGoalVerified();
+        String spoken = a.say == null || a.say.isEmpty() ? v.say : a.say;
+        if (spoken == null || spoken.isEmpty() || Sensitive.blocked(spoken)) spoken = "办完了。";
+        say(spoken);
+        end(End.DONE, null);
+        return true;
+    }
+
+    private GoalCheck.Verdict askGoal(ModelClient mc, String intent, StepHistory hist, ScreenSnapshot snap) {
+        String screen = snap == null ? null : snap.toModelText(MainScreenEsp32Port.MAX_REFS);
+        String raw = mc.complete(GoalCheck.SYSTEM, GoalCheck.userPrompt(intent, hist.forModel(), screen));
+        GoalCheck.Verdict v = GoalCheck.parse(raw);
+        AppLog.i("目标核对：" + (v.met ? "达成" : "未达成"));
+        return v;
+    }
+
+    /** 有限步数用尽后再问一轮。done 仍要过目标核对；核对不过就按步数用完停下。stop 不另做核对。 */
+    private void closeout(String intent, ModelConfig cfg, ModelClient mc, StepHistory hist, SuiteState s, Playbook book,
+                          InterruptionGuard interruptions)
             throws InterruptedException {
         if (cancelled) { end(End.CANCELLED, null); return; }
         this.step = (MAX_STEPS <= 0 ? step : MAX_STEPS) + 1;
-        hist.append("提醒：步数已用完，只能返回 done 或 stop，用 say 说明办到哪了，不要再给操作。\n");
+        hist.note(this.step, "提醒：步数已用完，只能返回 done 或 stop，用 say 说明办到哪了，不要再给操作。");
         phase(Phase.DECIDING, "收尾：问模型");
-        pruneHist(hist);
         ScreenSnapshot snap = port().snapshot();
+        if (snap != null) {
+            snap = settleScreen(this.step, snap, port(), s, hist, book, intent, interruptions);
+            if (snap == null) return;
+        }
         String jpeg = null;
         if (cfg.vision && ScreenCapture.available() && s != null) {
             Bitmap b = ScreenCapture.capture(host.context(), s.screenW, s.screenH, 320);
             jpeg = ScreenCapture.toJpegBase64(b, 720);
         }
-        ModelAction a = mc.nextAction(intent, hist.toString(),
-                snap == null ? null : snap.toModelText(MainScreenEsp32Port.MAX_REFS), jpeg);
+        String prior = book.relevant(intent, snap == null ? "" : snap.packageName);
+        ModelAction a = mc.nextAction(intent, hist.forModel(),
+                snap == null ? null : snap.toModelText(MainScreenEsp32Port.MAX_REFS), jpeg, prior);
         if ("done".equals(a.type)) {
-            say(a.say.isEmpty() ? "办完了。" : a.say);
-            end(End.DONE, null);
+            if (acceptDone(mc, intent, hist, snap, a)) return;
+            say("步骤已用完，目标也还没核对到办完，先停下。");
+            end(End.STEP_LIMIT, null);
             return;
         }
         say(a.say.isEmpty() ? "步骤太多，先停下。" : a.say);
         end(End.STEP_LIMIT, null);
+    }
+
+    /**
+     * 读屏之后、问模型之前：安全闸，然后由代码处理广告和跳转。返回 null 表示任务已经结束。
+     * 交给模型的那一屏是处理完之后重新读的，上一屏的编号不再使用。
+     */
+    private ScreenSnapshot settleScreen(int step, ScreenSnapshot snap, ScreenPort port, SuiteState suite,
+                                        StepHistory hist, Playbook book, String intent, InterruptionGuard guard)
+            throws InterruptedException {
+        for (int round = 0; round < 8; round++) {
+            if (cancelled) { end(End.CANCELLED, null); return null; }
+            if (snap == null) {
+                say("看不到屏幕：只读无障碍没开，也没有可用的截图。先停下，不猜坐标。");
+                end(End.BLIND, null);
+                return null;
+            }
+            SafetyGuard.Verdict safety = SafetyGuard.check(snap);
+            if (safety.stop()) {
+                say("停下了：" + safety.reason + "。这一步需要你本人处理，我不会继续自动输入。");
+                end(End.NEEDS_HUMAN, safety.reason);
+                return null;
+            }
+            guard.setEntryHint(book.skills().entryFor(intent));
+            InterruptionGuard.Decision d = guard.assess(snap);
+            if (d.action == InterruptionGuard.Action.CLEAR) {
+                guard.accept(snap);
+                return snap;
+            }
+            if (d.action == InterruptionGuard.Action.STOP) {
+                say(d.speak.isEmpty() ? "先停下。" : d.speak);
+                end(d.needsHuman ? End.NEEDS_HUMAN : End.GUARD, d.speak);
+                return null;
+            }
+            if (!applyInterrupt(step, d, port, suite, hist, book, guard)) return null;
+            snap = d.action == InterruptionGuard.Action.WAIT ? port.snapshot() : settledSnapshot(true);
+            if (d.action == InterruptionGuard.Action.TAP_CLOSE && guard.overCap()) {
+                say(guard.consecutivePopups() >= InterruptionGuard.CONSECUTIVE_POPUP_CAP
+                        ? "红包弹窗一连关了 " + InterruptionGuard.CONSECUTIVE_POPUP_CAP + " 次，先停下，没有继续点。"
+                        : "这一趟已经关了 " + InterruptionGuard.TASK_POPUP_CAP + " 次广告弹窗，先停下，没有继续点。");
+                end(End.GUARD, "广告弹窗过多");
+                return null;
+            }
+        }
+        say("广告或跳转还在，需要你本人处理。我没有在那一页上继续点。");
+        end(End.NEEDS_HUMAN, "广告还在");
+        return null;
+    }
+
+    /**
+     * 执行打断处理。只点关闭/跳过，或按返回、主页、进入路线。不过确认闸，不用截图找叉，不用无障碍点击。
+     * @return false 表示任务已经结束
+     */
+    private boolean applyInterrupt(int step, InterruptionGuard.Decision d, ScreenPort port, SuiteState suite,
+                                   StepHistory hist, Playbook book, InterruptionGuard guard) throws InterruptedException {
+        switch (d.action) {
+            case TAP_CLOSE: {
+                if (d.target == null) {
+                    guard.markCloseUnusable();
+                    return true;
+                }
+                int[] p = visibleCenter(d.target.bounds, suite);
+                if (p == null) {
+                    guard.markCloseUnusable();
+                    return true;
+                }
+                ActionResult res = port.tapXY(p[0], p[1]);
+                if (!res.isOk()) {
+                    say("关弹窗没点到：" + res.reason + "。没有改用其他方式。");
+                    end(cancelled ? End.CANCELLED : endFor(res), res.reason);
+                    return false;
+                }
+                guard.commit(d);
+                hist.note(step, InterruptionGuard.popupNote(step));
+                if (d.memoryApp != null && !d.memoryApp.isEmpty()) book.memory().learnInterruption(d.memoryApp, d.homeFeed);
+                AppLog.i("关掉弹窗");
+                return true;
+            }
+            case BACK: {
+                ActionResult res = port.back();
+                if (!res.isOk()) {
+                    say("返回没做成：" + res.reason + "。没有改用其他方式。");
+                    end(cancelled ? End.CANCELLED : endFor(res), res.reason);
+                    return false;
+                }
+                guard.commit(d);
+                hist.note(step, "第 " + step + " 步按了返回，离开跳转页。");
+                return true;
+            }
+            case HOME: {
+                ActionResult res = port.pressKey(ScreenPort.KEYCODE_HOME);
+                if (!res.isOk()) {
+                    say("回主页没做成：" + res.reason + "。没有在外面的页面上点。");
+                    end(cancelled ? End.CANCELLED : endFor(res), res.reason);
+                    return false;
+                }
+                guard.commit(d);
+                hist.note(step, "第 " + step + " 步回到桌面，没有在外面的页面上点。");
+                return true;
+            }
+            case WAIT: {
+                guard.commit(d);
+                for (int i = 0; i < InterruptionGuard.FULLSCREEN_WAIT_SLICES; i++) {
+                    if (cancelled) { end(End.CANCELLED, null); return false; }
+                    Timing.sleep(Timing.afterHeavyPage());
+                }
+                hist.note(step, "第 " + step + " 步广告没有关闭按钮，只等不点。");
+                return true;
+            }
+            case REENTER: {
+                String pkg = guard.expectedPackage();
+                if (pkg != null && !pkg.isEmpty()) {
+                    ActionResult opened = port.openApp(pkg);
+                    if (!opened.isOk()) {
+                        say("没能按进入路线重新打开应用：" + opened.reason + "。没有在广告页里继续点。");
+                        end(cancelled ? End.CANCELLED : endFor(opened), opened.reason);
+                        return false;
+                    }
+                    ScreenSnapshot now = settledSnapshot(true);
+                    if (now != null) {
+                        SafetyGuard.Verdict sv = SafetyGuard.check(now);
+                        if (sv.stop()) {
+                            say("停下了：" + sv.reason + "。这一步需要你本人处理，我不会继续自动输入。");
+                            end(End.NEEDS_HUMAN, sv.reason);
+                            return false;
+                        }
+                        ScreenSnapshot.Node entry = InterruptionGuard.entryNode(now, guard.entryHint());
+                        if (entry != null) {
+                            int[] p = visibleCenter(entry.bounds, suite);
+                            if (p != null) {
+                                ActionResult tap = port.tapXY(p[0], p[1]);
+                                if (!tap.isOk()) {
+                                    say("进入路线没点到：" + tap.reason + "。没有在广告页里继续点。");
+                                    end(cancelled ? End.CANCELLED : endFor(tap), tap.reason);
+                                    return false;
+                                }
+                            }
+                        }
+                    }
+                }
+                guard.commit(d);
+                hist.note(step, "第 " + step + " 步按进入路线重新打开，没有在广告页里点。");
+                return true;
+            }
+            default:
+                return true;
+        }
     }
 
     /**
@@ -845,13 +1082,28 @@ public final class TaskSession implements CallChannel.Listener {
      * @return false 表示任务已结束
      */
     private boolean runBatch(int step, ModelAction batch, ScreenSnapshot snap, ScreenPort port, SuiteState s,
-                             OperationGuard guard, StringBuilder hist, String[] hint) throws InterruptedException {
-        hist.append(step).append(". 一次多步共 ").append(batch.steps.size()).append(" 个子动作");
-        if (!batch.say.isEmpty()) hist.append(" — ").append(batch.say);
-        hist.append('\n');
+                             OperationGuard guard, StepHistory hist, String[] hint, InterruptionGuard interruptions)
+            throws InterruptedException {
+        StringBuilder line = new StringBuilder();
+        line.append(step).append(". 一次多步共 ").append(batch.steps.size()).append(" 个子动作");
+        if (!batch.say.isEmpty()) line.append(" — ").append(batch.say);
+        line.append('\n');
+        hist.action(step, "do_steps", batch.steps.size() + " 个子动作", appOf(batch, snap), "开始执行", screenNote(snap), line.toString());
+        String plannedPkg = snap == null ? "" : snap.packageName;
+        long plannedFp = snap == null ? 0L : snap.fingerprint();
         ScreenSnapshot cur = snap;
         for (int i = 0; i < batch.steps.size(); i++) {
             if (cancelled) { end(End.CANCELLED, null); return false; }
+            if (i > 0 && InterruptionGuard.refsStale(plannedPkg, plannedFp, cur)) {
+                hist.note(step, "一次多步停住：包名或界面指纹已经变了，这一屏之前的编号全部作废，后面没做。");
+                AppLog.i("一次多步因包名或指纹变化停住");
+                return true;
+            }
+            if (cur != null && interruptions.assess(cur).action != InterruptionGuard.Action.CLEAR) {
+                hist.note(step, "一次多步遇到广告或跳转，编号作废，后面没做。没有把这屏交给模型。");
+                AppLog.i("一次多步遇到打断，停住");
+                return true;
+            }
             ModelAction a = batch.steps.get(i);
             if (cur != null) {
                 SafetyGuard.Verdict v = SafetyGuard.check(cur);
@@ -864,11 +1116,11 @@ public final class TaskSession implements CallChannel.Listener {
             String r = runOneAction(step, a, cur, port, s, guard, hist, hint, false);
             if ("ended".equals(r)) return false;
             if ("gated".equals(r)) {
-                hist.append("一次多步在已确认的关键步之后结束，后面没做。\n");
+                hist.note(step, "一次多步在已确认的关键步之后结束，后面没做。");
                 return true;
             }
             if (r != null) {
-                hist.append("一次多步停在子步 ").append(i + 1).append("：").append(r).append("，后面没做。\n");
+                hist.note(step, "一次多步停在子步 " + (i + 1) + "：" + r + "，后面没做。");
                 AppLog.i("一次多步停在子步 " + (i + 1) + "：" + r);
                 return true;
             }
@@ -876,7 +1128,7 @@ public final class TaskSession implements CallChannel.Listener {
                 boolean met = waitUntil(a, port);
                 if (cancelled) { end(End.CANCELLED, null); return false; }
                 if (!met && UntilCheck.hasContent(a)) {
-                    hist.append("一次多步停在子步 ").append(i + 1).append("：等到时限仍未满足等待条件，后面没做。\n");
+                    hist.note(step, "一次多步停在子步 " + (i + 1) + "：等到时限仍未满足等待条件，后面没做。");
                     AppLog.i("一次多步等待未满足，子步 " + (i + 1));
                     return true;
                 }
@@ -903,7 +1155,7 @@ public final class TaskSession implements CallChannel.Listener {
      * @return null 已执行；"ended" 任务已结束；其他字符串是未执行的原因
      */
     private String runOneAction(int step, ModelAction a, ScreenSnapshot snap, ScreenPort port, SuiteState s,
-                                OperationGuard guard, StringBuilder hist, String[] hint,
+                                OperationGuard guard, StepHistory hist, String[] hint,
                                 boolean failTaskOnBadTarget) throws InterruptedException {
         ScreenSnapshot.Node target = null;
         if (a.ref > 0) {
@@ -960,18 +1212,26 @@ public final class TaskSession implements CallChannel.Listener {
         ActionResult res = execute(port, a, g != null);
         AppLog.i("第 " + step + " 步 " + a.type + " → " + res.status);
         if (!res.isOk()) {
+            hist.action(step, a.type, targetOf(a, target), appOf(a, snap), "没做成：" + res.reason, screenNote(snap),
+                    step + ". " + describe(a, target) + " 没做成：" + res.reason);
             say("这一步没做成：" + res.reason + "。没有改用其他方式重试，任务停下。");
             end(cancelled ? End.CANCELLED : endFor(res), res.reason);
             return "ended";
         }
         if (g == null && !"wait".equals(a.type)) gate.noteWrite();
         lastDone = describe(a, target);
-        hist.append(step).append(". ").append(lastDone);
-        if (res.verification == ActionResult.Verification.MATCH) hist.append("（输入框核对一致）");
-        if (!a.say.isEmpty()) hist.append(" — ").append(a.say);
-        hist.append('\n');
+        StringBuilder line = new StringBuilder();
+        line.append(step).append(". ").append(lastDone);
+        String result = "做成了";
+        if (res.verification == ActionResult.Verification.MATCH) {
+            line.append("（输入框核对一致）");
+            result = "做成了（输入框核对一致）";
+        }
+        if (!a.say.isEmpty()) line.append(" — ").append(a.say);
+        line.append('\n');
+        hist.action(step, a.type, targetOf(a, target), appOf(a, snap), result, screenNote(snap), line.toString());
         if (g != null) {
-            hist.append("（上一步是你确认过的「").append(g.label).append("」，已执行；不要再做第二次）\n");
+            hist.note(step, "（上一步是你确认过的「" + g.label + "」，已执行；不要再做第二次）");
             port.awaitChange(Timing.afterPageOpen());
             return "gated";
         }
@@ -992,14 +1252,45 @@ public final class TaskSession implements CallChannel.Listener {
         }
     }
 
-    private static void pruneHist(StringBuilder hist) {
-        if (hist.length() <= 8000) return;
-        String s = hist.toString();
-        int cut = s.length() - 6000;
-        int nl = s.indexOf('\n', cut);
-        if (nl > 0) cut = nl + 1;
-        hist.setLength(0);
-        hist.append("（更早的步骤已省略）\n").append(s.substring(cut));
+    private static String targetOf(ModelAction a, ScreenSnapshot.Node target) {
+        String lab = target == null ? "" : target.label();
+        lab = lab.replace('\n', ' ').trim();
+        if (lab.length() > 24) lab = lab.substring(0, 24) + "…";
+        if (!lab.isEmpty() && !Sensitive.blocked(lab)) return lab;
+        if (a == null) return "";
+        if ("open_app".equals(a.type)) return a.app == null ? "" : a.app.trim();
+        if ("type".equals(a.type)) {
+            String t = a.text == null ? "" : a.text.trim();
+            if (t.isEmpty() || Sensitive.blocked(t) || t.length() > 40) return "输入框";
+            return t;
+        }
+        if ("scroll".equals(a.type)) return "up".equals(a.text) ? "往回" : "往下";
+        if ("clear".equals(a.type)) return "输入框";
+        return "";
+    }
+
+    private static String appOf(ModelAction a, ScreenSnapshot snap) {
+        if (a != null && "open_app".equals(a.type)) {
+            String d = UntilCheck.displayName(a.app);
+            if (d != null) return d;
+        }
+        if (snap != null) {
+            String d = UntilCheck.displayName(snap.packageName);
+            if (d != null) return d;
+        }
+        return "";
+    }
+
+    private static String screenNote(ScreenSnapshot snap) {
+        if (snap == null) return "";
+        String app = UntilCheck.displayName(snap.packageName);
+        if (app == null) app = "";
+        String title = snap.windowTitle == null ? "" : snap.windowTitle.trim().replace('\n', ' ');
+        if (title.length() > 24) title = title.substring(0, 24) + "…";
+        if (Sensitive.blocked(title)) title = "";
+        if (app.isEmpty()) return title;
+        if (title.isEmpty()) return app;
+        return app + " · " + title;
     }
 
     /**
