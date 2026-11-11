@@ -39,6 +39,7 @@ public final class SkillBook {
         String goal;
         final List<String> apps = new ArrayList<>();
         String preconditions;
+        String entry = "";
         final List<String> outline = new ArrayList<>();
         int uses;
         long savedAt;
@@ -64,6 +65,8 @@ public final class SkillBook {
                 s.id = o.optString("id", "");
                 s.goal = o.optString("goal", "");
                 s.preconditions = o.optString("preconditions", "");
+                s.entry = o.optString("entry", "");
+                if (s.entry.isEmpty()) s.entry = RouteText.DEFAULT_ENTRY;
                 s.uses = o.optInt("uses", 0);
                 s.savedAt = o.optLong("savedAt", 0);
                 JSONArray apps = o.optJSONArray("apps");
@@ -107,6 +110,7 @@ public final class SkillBook {
                         .put("goal", s.goal)
                         .put("apps", apps)
                         .put("preconditions", s.preconditions == null ? "" : s.preconditions)
+                        .put("entry", s.entry == null ? "" : s.entry)
                         .put("outline", outline)
                         .put("uses", s.uses)
                         .put("savedAt", s.savedAt));
@@ -127,12 +131,14 @@ public final class SkillBook {
         List<String> apps = RouteText.apps(turns);
         if (apps.isEmpty()) apps = UntilCheck.mentionedApps(utterance);
         String pre = RouteText.preconditions(apps);
+        String entry = RouteText.entryRoute(turns);
         for (Skill s : skills) {
             if (dice(goal, s.goal) >= REPLACE_DICE) {
                 s.goal = goal;
                 s.apps.clear();
                 s.apps.addAll(apps);
                 s.preconditions = pre;
+                s.entry = entry;
                 s.outline.clear();
                 s.outline.addAll(outline);
                 s.savedAt = System.currentTimeMillis();
@@ -144,6 +150,7 @@ public final class SkillBook {
         s.goal = goal;
         s.apps.addAll(apps);
         s.preconditions = pre;
+        s.entry = entry;
         s.outline.addAll(outline);
         s.savedAt = System.currentTimeMillis();
         skills.add(s);
@@ -154,7 +161,7 @@ public final class SkillBook {
         List<Skill> hits = match(intent, MAX_INJECT);
         if (hits.isEmpty()) return "";
         StringBuilder b = new StringBuilder();
-        b.append("可参考的技能（按当前屏幕改，不要按坐标回放；发送、删除、提交、下单仍要口令，付款不代付）：\n");
+        b.append("可参考的技能（按当前屏幕改，不要按坐标回放；按「进入」走，不要从首页信息流进；发送、删除、提交、下单仍要口令，付款不代付）：\n");
         for (Skill s : hits) {
             if (injected.add(s.id)) s.uses++;
             b.append("- 目标：").append(s.goal).append('\n');
@@ -167,6 +174,7 @@ public final class SkillBook {
                 b.append('\n');
             }
             b.append("  前提：").append(s.preconditions).append('\n');
+            b.append("  进入：").append(s.entry == null || s.entry.isEmpty() ? RouteText.DEFAULT_ENTRY : s.entry).append('\n');
             b.append("  提纲：");
             for (int i = 0; i < s.outline.size(); i++) {
                 if (i > 0) b.append(" → ");
@@ -175,6 +183,14 @@ public final class SkillBook {
             b.append('\n');
         }
         return b.toString();
+    }
+
+    /** 最相近的一条技能的进入路线；没有则是默认的搜索 / 我的 / 订单。 */
+    public String entryFor(String intent) {
+        List<Skill> hits = match(intent, 1);
+        if (hits.isEmpty()) return RouteText.DEFAULT_ENTRY;
+        String entry = hits.get(0).entry;
+        return entry == null || entry.isEmpty() ? RouteText.DEFAULT_ENTRY : entry;
     }
 
     List<Skill> match(String intent, int limit) {

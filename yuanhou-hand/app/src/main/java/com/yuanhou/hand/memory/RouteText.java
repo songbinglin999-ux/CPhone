@@ -82,6 +82,19 @@ public final class RouteText {
         return out;
     }
 
+    public static final String DEFAULT_ENTRY = "不要从首页信息流进入；优先走搜索，或「我的」「订单」。";
+
+    /** 办成的路线要写明从哪进。首页信息流广告最多，记下搜索或「我的 / 订单」。 */
+    public static String entryRoute(List<StepHistory.Turn> turns) {
+        StringBuilder all = new StringBuilder();
+        for (String line : outline(turns, 12)) all.append(line);
+        String text = all.toString();
+        boolean feed = text.contains("首页") || text.contains("推荐") || text.contains("猜你喜欢");
+        if (text.contains("搜索") && !feed) return "从搜索进入，不从首页信息流进。";
+        if ((text.contains("我的") || text.contains("订单")) && !feed) return "从「我的」或「订单」进入，不从首页信息流进。";
+        return DEFAULT_ENTRY;
+    }
+
     public static String preconditions(List<String> apps) {
         String base = "在主屏上按当前界面做；发送、删除、提交、下单仍要口令，付款不代付。";
         if (apps == null || apps.isEmpty()) return base;

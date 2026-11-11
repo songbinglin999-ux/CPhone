@@ -1,4 +1,4 @@
-# 远手（com.yuanhou.hand）第一期前台编排应用 · 0.1.20
+# 远手（com.yuanhou.hand）第一期前台编排应用 · 0.1.21
 
 依据：/workspace/private-phone-assistant-phase1-ble.md。复用 s3-hand-test 已在真机跑通的 GATT 客户端。
 
@@ -9,6 +9,18 @@
 - 桌面自测：`adb shell am start -n com.yuanhou.hand/.ui.MainActivity --ez selftest true`（0.1.13 起首页会转到「设置 › 调试」，在那里点自测框），结果在
   /sdcard/Android/data/com.yuanhou.hand/files/selftest.txt，日志 log.txt
 - 文字指令：`--es say "演练发微信 张三 你好"`（参数里不要有空格以外的 shell 特殊字符）
+
+## 0.1.21：广告和跳转由代码处理
+
+读完主屏、问模型之前先过安全闸，再过打断守卫。红包、领券、直播间和跳出当前应用不交给模型判断。
+
+- 界面树上有「跳过 / 关闭广告」这类关闭，并且同时能看出是广告或红包时，本机用 ESP32 HID 点那个关闭，不过确认闸，也不改用无障碍点击。点完重读，确认回到原来的页面，并在步骤里写「第 N 步关掉红包弹窗」。一连关掉 3 个，或这一趟关掉 5 个，就停下并说明。
+- 还在同一个应用里，但标题变成直播间或会场：只按一次返回。回不来就按技能里的进入路线重新打开（搜索，或「我的」「订单」），不在广告页里继续点。
+- 已经离开原来的应用：外面的页面只允许返回和回主页，不点任何按钮。付款页仍由安全闸停下，交给本人。返回和回主页两次都没回来就停下。
+- 全屏倒计时、或界面树读不出来的网页广告：只等，不用截图去找叉。等完还在，就以需要本人处理结束。
+- 一次多步进行中，包名或界面指纹和这一批开始时不同，整批剩下的编号作废，后面不再点。
+- 办成的技能会写明进入路线，不从首页信息流进。出现过弹窗会记进这个应用的经验，例如「淘宝从首页进弹窗多」。
+- 淘宝摇一摇、个性化广告和推送开关由使用的人在手机上自己关，这一版不改那些系统设置。
 
 ## 0.1.20：长程里的摘要、记事、技能提纲、办完前核对
 
@@ -135,7 +147,7 @@
 - hand：HandProtocol / HandGattClient（复制自测试应用）/ HandExecutor（阻塞式动作、剪贴板+Ctrl+V）/ SuiteState（两件套就绪判定）
 - service：OrchestratorService（前台服务、常驻通知、心跳看门狗、2–5 s 重连、SET_SCREEN）
 - screen：ReadonlyAccessibilityService（只读，默认未开启）/ ScreenSnapshot / ScreenCapture（MediaProjection，需本人同意）
-- policy：OperationGuard（无效果、兜圈、空白即停）/ ConfirmationPolicy（按钮词表，供 gate/IrreversibleDetector 复用）/ SafetyGuard（密码、验证码、支付密码、解锁页、环境异常即停）
+- policy：OperationGuard（无效果、兜圈、空白即停）/ ConfirmationPolicy（按钮词表，供 gate/IrreversibleDetector 复用）/ SafetyGuard（密码、验证码、支付密码、解锁页、环境异常即停）/ InterruptionGuard（广告弹窗、直播跳转、离开应用；关闭走 HID，不问模型）
 - model：ModelConfig（空位）/ ModelKeys（Key 解析：设置 → 运行时环境）/ ModelClient（OpenAI / DeepSeek chat/completions，仅在有 Key 且同意后调用）/ ModelAction / PromptText
 - memory（0.1.20）：StepHistory（长历史收成结构化摘要）/ GoalCheck、DoneGate（done 前强制核对）/ AgentMemory（偏好和应用经验）/ SkillBook（办成路线的提纲）/ Playbook（本机 playbook/ 目录）
 - session：CallChannel / LocalTextChannel（桌上文字自测，不出声）/ SipCallChannel（内嵌 Liblinphone 5.5.39 的 SIP 用户代理：来电先查两件套、自动接听、下行写文件听写、合成语音在同一通话上行播放）/ CallVoice（只 synthesizeToFile，不外放）/ CallTranscriber（Vosk 离线中文听写）/ SipConfig（本人自己填）/ TaskSession
@@ -148,4 +160,4 @@
 - 听写模型（不进 APK）：把 vosk-model-small-cn-0.22 解压为 /sdcard/Android/data/com.yuanhou.hand/files/vosk-model-cn/
 
 ## 对照 Mika
-见 docs/mika-lessons.md。自检（桌面 JVM，不连手机、不调模型）：`sh jvmcheck/run.sh`（PolicyCheck / IntentCheck / GateCheck / PortCheck / LanCheck / WechatCheck / HomeCheck / ModelActionCheck / LongHorizonCheck）
+见 docs/mika-lessons.md。自检（桌面 JVM，不连手机、不调模型）：`sh jvmcheck/run.sh`（PolicyCheck / IntentCheck / GateCheck / PortCheck / LanCheck / WechatCheck / HomeCheck / ModelActionCheck / LongHorizonCheck / InterruptionCheck）

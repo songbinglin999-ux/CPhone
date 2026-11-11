@@ -185,8 +185,8 @@ public class LongHorizonCheck {
 
     static void sources() throws Exception {
         String gradle = Files.readString(Path.of("../app/build.gradle"), StandardCharsets.UTF_8);
-        yes("versionName 0.1.20", gradle.contains("versionName '0.1.20'"));
-        yes("versionCode 21", gradle.contains("versionCode 21"));
+        yes("versionName 0.1.21", gradle.contains("versionName '0.1.21'"));
+        yes("versionCode 22", gradle.contains("versionCode 22"));
 
         String ts = Files.readString(Path.of("../app/src/main/java/com/yuanhou/hand/session/TaskSession.java"), StandardCharsets.UTF_8);
         no("不再硬截断", ts.contains("更早的步骤已省略") || ts.contains("pruneHist"));

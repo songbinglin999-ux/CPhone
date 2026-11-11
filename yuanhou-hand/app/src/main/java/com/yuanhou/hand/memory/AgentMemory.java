@@ -151,6 +151,14 @@ public final class AgentMemory {
         offerApp("failed", app, note);
     }
 
+    /** 广告打断写回应用经验。homeFeed 为真时记下「从首页进弹窗多」。不写密钥。 */
+    public void learnInterruption(String app, boolean homeFeed) {
+        String note = homeFeed
+                ? "从首页进弹窗多，下次从搜索或「我的」「订单」进入"
+                : "出现过广告或红包弹窗，下次从搜索或「我的」「订单」进入，不从首页信息流进";
+        offerApp("note", app, note);
+    }
+
     /**
      * 只拼和这句话、当前前台应用有关的几条。无关应用的经验不放进去。
      */
@@ -171,7 +179,7 @@ public final class AgentMemory {
         for (Note n : notes) {
             if (!apps.contains(n.app)) continue;
             b.append("- ").append(n.app);
-            b.append("worked".equals(n.outcome) ? "（做成过）" : "（没做成）");
+            b.append("worked".equals(n.outcome) ? "（做成过）" : "failed".equals(n.outcome) ? "（没做成）" : "（留意）");
             b.append("：").append(n.note).append('\n');
         }
         if (b.length() == 0) return "";
@@ -237,7 +245,7 @@ public final class AgentMemory {
     private void offerApp(String outcome, String app, String note) {
         String shown = UntilCheck.displayName(app);
         if (shown == null) return;
-        if (!"worked".equals(outcome) && !"failed".equals(outcome)) return;
+        if (!"worked".equals(outcome) && !"failed".equals(outcome) && !"note".equals(outcome)) return;
         if (note == null) return;
         String n = note.trim();
         if (n.isEmpty() || Sensitive.blocked(n)) return;
