@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">远手</string>
+    <string name="a11y_label">远手 · 只读界面</string>
+    <string name="a11y_desc">只读取当前屏幕的界面文字和位置，交给远手决定下一步。不会通过无障碍点击、滑动或输入；点击和输入只由已配对的 S3 Phone Hand 键鼠完成。遇到密码、验证码、支付密码页会立即停止。</string>
+</resources>

@@ -1,0 +1,26 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        // 本机预取的官方 AAR（与官方 .sha1 核对过；Mac 上直连 linphone.org 很慢时用）。没有这个目录就直接走官方仓库。
+        maven {
+            url "${rootDir}/../local-maven"
+            content { includeGroup "org.linphone" }
+        }
+        // Linphone 官方 Maven 仓库（linphone.org/maven_repository 会 301 到 www 上的 404；实际文件在 download.linphone.org）
+        maven {
+            url "https://download.linphone.org/maven_repository"
+            content { includeGroup "org.linphone" }
+        }
+    }
+}
+rootProject.name = "S3HandOrchestrator"
+include ':app'

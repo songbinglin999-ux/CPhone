@@ -1,0 +1,45 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.apk
+*.ap_
+*.aab
+*.dex
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing material must never be committed
+signing/*.keystore
+signing/*.jks
+*.keystore
+*.jks
+*.p12
+*.pfx
+
+# ESP-IDF generated (any project dir; sdkconfig.defaults stays tracked)
+**/build/
+**/sdkconfig
+**/sdkconfig.old
+
+# Machine-local Gradle / Android paths
+**/local.properties
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Secrets and local env
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*~

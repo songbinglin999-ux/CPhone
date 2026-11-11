@@ -1,0 +1,51 @@
+menu "S3 Phone Hand"
+
+config HAND_DEVICE_NAME
+    string "BLE 广播名称"
+    default "S3 Phone Hand"
+
+choice HAND_LED_TYPE
+    prompt "状态灯类型"
+    default HAND_LED_WS2812
+    config HAND_LED_WS2812
+        bool "板载 WS2812 RGB 灯（DevKitC-1 风格）"
+    config HAND_LED_PLAIN
+        bool "普通单色 LED（高电平点亮）"
+    config HAND_LED_NONE
+        bool "不使用状态灯"
+endchoice
+
+config HAND_LED_GPIO
+    int "状态灯 GPIO（DevKitC-1 v1.0 / 多数 N16R8 板为 48；v1.1 为 38）"
+    range -1 48
+    default 48
+
+config HAND_BOOT_BUTTON_GPIO
+    int "多功能按键 GPIO（板载 BOOT = GPIO0，-1 表示禁用）"
+    range -1 48
+    default 0
+
+config HAND_ESTOP_BUTTON_GPIO
+    int "额外急停按键 GPIO（低电平有效，-1 表示无）"
+    range -1 48
+    default -1
+
+config HAND_PAIR_BUTTON_GPIO
+    int "额外配对按键 GPIO（低电平有效，-1 表示无）"
+    range -1 48
+    default -1
+
+config HAND_PAIRING_WINDOW_S
+    int "配对窗口时长（秒）"
+    range 10 600
+    default 60
+
+config HAND_ENABLE_DIGITIZER
+    bool "可选：额外提供单点触摸屏（HID Digitizer，绝对坐标）报告"
+    default n
+    help
+        默认关闭。打开后报告描述符会多一个 Touch Screen 集合（Report ID 4），
+        绝对坐标的点击/长按/滑动会改走触摸报告，而不是鼠标相对位移。
+        是否被荣耀 AQM-AL10 识别为触摸屏必须真机验证。修改后需在手机上删除配对重新配对。
+
+endmenu

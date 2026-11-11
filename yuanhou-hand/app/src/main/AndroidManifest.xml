@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.BLUETOOTH"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Wi-Fi 恢复后重注册 SIP -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <!-- 0.1.9：开机后试着启动前台服务（HarmonyOS 自启动管理可能不放行，不做绕过） -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- Liblinphone AAR 会合并进来麦克风和相机权限。远手的通话音频走文件（下行写文件给听写，上行由通话播放器送合成语音），
+         不用房间麦克风，也不用相机，所以把这些权限去掉：装上后不会有麦克风/相机授权，也不会弹权限框。 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove"/>
+    <uses-permission android:name="android.permission.CAMERA" tools:node="remove"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" tools:node="remove"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" tools:node="remove"/>
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>
+
+    <!-- Android 11+ 包可见性；本机是 Android 10，写上只为以后升级不出错 -->
+    <queries>
+        <package android:name="com.tencent.mm"/>
+        <package android:name="com.taobao.taobao"/>
+        <package android:name="com.taobao.idlefish"/>
+        <package android:name="com.eg.android.AlipayGphone"/>
+        <package android:name="com.sankuai.meituan"/>
+        <package android:name="com.sankuai.meituan.takeoutnew"/>
+        <!-- 只用于把要说的话合成到文件，再在 SIP 通话里播放；不外放 -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:icon="@android:drawable/ic_menu_compass"
+        android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|navigation"
+            android:windowSoftInputMode="adjustPan|stateHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ui.SettingsActivity"
+            android:exported="false"
+            android:label="模型与通话配置"
+            android:windowSoftInputMode="adjustResize"/>
+
+        <service
+            android:name=".service.OrchestratorService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|mediaProjection"/>
+
+        <!-- 桌上联调：只在调试版生效；DUMP 权限保护，只有 adb shell/系统能发广播进来 -->
+        <receiver
+            android:name=".debug.DebugReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.yuanhou.hand.DEBUG_SAY"/>
+                <action android:name="com.yuanhou.hand.DEBUG_TREE"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- 开机后试着启动前台服务；只收系统的 BOOT_COMPLETED，不导出给别的应用 -->
+        <receiver
+            android:name=".service.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- 只读界面树：不声明 canPerformGestures，代码里也不调用任何 performAction。
+             默认关闭，只有本人在系统「无障碍」设置里明确同意后才会启用。 -->
+        <service
+            android:name=".screen.ReadonlyAccessibilityService"
+            android:exported="true"
+            android:label="@string/a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/readonly_accessibility"/>
+        </service>
+    </application>
+</manifest>

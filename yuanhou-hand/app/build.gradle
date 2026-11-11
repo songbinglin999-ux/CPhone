@@ -1,0 +1,70 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 与机上已装版本兼容必须用同一把 Mac debug.keystore，不要用盒子自己生成的那把。
+def yuanhouDebugKeystore = {
+    def env = System.getenv("YUANHOU_DEBUG_KEYSTORE")
+    def candidates = []
+    if (env != null && !env.trim().isEmpty()) candidates.add(file(env.trim()))
+    candidates.add(file("/Users/mac/.android/debug.keystore"))
+    candidates.add(rootProject.file("signing/mac-debug.keystore"))
+    return candidates.find { it != null && it.isFile() }
+}()
+
+android {
+    namespace 'com.yuanhou.hand'
+    compileSdk 36
+    if (yuanhouDebugKeystore != null) {
+        signingConfigs {
+            debug {
+                storeFile yuanhouDebugKeystore
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
+        println "远手 debug 签名使用 ${yuanhouDebugKeystore.absolutePath}"
+    } else {
+        println "警告：未找到 Mac debug.keystore（环境变量 YUANHOU_DEBUG_KEYSTORE、/Users/mac/.android/debug.keystore、或工程 signing/mac-debug.keystore）。本次将使用本机默认 debug 证书，和已装在手机上的版本签名不兼容，不要把这份 APK 当作可升级包。"
+    }
+    defaultConfig {
+        applicationId 'com.yuanhou.hand'
+        minSdk 29
+        targetSdk 29
+        versionCode 20
+        versionName '0.1.19'
+        // 备用机（荣耀 Play4T Pro，麒麟 710A）是 arm64；只打这一个 ABI，APK 小一些
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    buildTypes {
+        debug {
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    packaging {
+        jniLibs { useLegacyPackaging true }
+    }
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+dependencies {
+    // Liblinphone：远手自己做 SIP 用户代理。钉死 5.5.39（5.5 分支最新正式版；AAR 声明 minSdk 23；
+    // 同一台备用机上已装的 Linphone 6.2.x 用的就是 5.5.+，说明这条分支能在这台 Android 10 上跑）。不用 5.3.+ 这类浮动版本。
+    implementation 'org.linphone:linphone-sdk-android:5.5.39'
+    // Liblinphone 的 Java 层在 AudioHelper / CoreService 里引用这些 androidx 类
+    implementation 'androidx.annotation:annotation:1.9.1'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.media:media:1.7.0'
+    // 通话下行音频的离线听写（Vosk，Apache-2.0；中文模型另放到应用外部私有目录，不进 APK、不联网、不需要 Key）
+    implementation 'net.java.dev.jna:jna:5.18.1@aar'
+    implementation 'com.alphacephei:vosk-android:0.3.75@aar'
+    // 0.1.12：在本机把微信 Bot 绑定二维码画出来（ZXing core，Apache-2.0，纯 Java；Mika 用的同一版本）
+    implementation 'com.google.zxing:core:3.5.3'
+}

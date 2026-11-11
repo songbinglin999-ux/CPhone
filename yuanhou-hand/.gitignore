@@ -1,0 +1,3 @@
+# Mac 的 debug.keystore 副本，只在本机/盒子打包用，不要提交进仓库
+signing/mac-debug.keystore
+signing/*.keystore
