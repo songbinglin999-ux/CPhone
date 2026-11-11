@@ -76,18 +76,26 @@ public final class ModelClient {
             + "规则：遇到密码、验证码、支付密码、解锁页，或应用提示环境异常、拒绝自动操作，一律返回 stop 并说明；"
             + "已做过的步骤里出现「提醒」时，说明上一步没效果或在兜圈，换别的办法或 stop，不要重复同一个动作；"
             + "不要群发、不要批量下单、不要自己付款；看不清就返回 stop，不要猜坐标。任务完成返回 done，say 里念出结果。"
-            + "步数没有短任务上限，长一点的事要一直做到 done 或必须停下，不要因为步骤多就提前 stop。";
+            + "本机会强制再做一轮目标核对，对照用户原话和当前屏幕；没核对通过不会结束，步骤里会出现「目标核对未通过」，这时要继续办，不要连着重复 done。"
+            + "不要自己返回 goal_check。stop 会立刻停下，不再做目标核对。用户说取消也会立刻停下。"
+            + "已做过的步骤变长后，较早的步骤收成「第N步 动作 目标或应用 结果 界面」的摘要，最近几步仍是原文。摘要里的每一步都做过，不要当成没发生，也不要重复已经做成的关键步。"
+            + "若前面有「本机记得」或「可参考的技能」，那是这台手机上保存的偏好、应用经验和办成过的路线提纲，只按当前屏幕改着用，不要按坐标回放，也不要把提纲里没有发生的事当成已经做成。"
+            + "步数没有短任务上限，长一点的事要一直做到核对通过的 done 或必须停下，不要因为步骤多就提前 stop。";
 
     static final String ANSWER = "你是家里备用手机上的助手「远手」。用一两句简短中文口语回答用户，会被念给他听。"
             + "如果给了屏幕内容，只根据屏幕内容回答，看不到的就说看不到；不要编造。不要建议你去操作手机，这一轮只回答。";
 
     /** 阻塞调用；失败返回 action=stop。 */
     public ModelAction nextAction(String intent, String history, String screenText, String jpegBase64) {
+        return nextAction(intent, history, screenText, jpegBase64, null);
+    }
+
+    /** [prior] 是本机记得和可参考技能，只放和这件事有关的几条；可以为空。 */
+    public ModelAction nextAction(String intent, String history, String screenText, String jpegBase64, String prior) {
         String miss = cfg.missing();
         if (miss != null) return stop(miss + "，先停下。");
         try {
-            String userText = "用户意图：" + intent + "\n已做过的步骤：\n" + (history.isEmpty() ? "（无）" : history)
-                    + "\n当前屏幕（无障碍只读）：\n" + (screenText == null ? "（无界面树）" : screenText);
+            String userText = PromptText.actionUser(intent, history, screenText, prior);
             if (active == null) active = cfg.preferred();
             String firstErr = null;
             Result r = post(active, buildActionMsgs(userText, jpegBase64, active), 45000);

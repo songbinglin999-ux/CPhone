@@ -37,7 +37,7 @@
 | 本人接管后再交回继续（WaitingTakeover，无超时等待） | `core/agent/UserExchange.takeover` | 人在电话另一头，没法在手机上接管；第一期遇到登录/验证码/付款密码页一律停下说明 |
 | 询问模式只在花钱时问，发消息、发帖、删除、改设置都直接做；自主模式连付款也不问 | `docs/modes.md`、`ConfirmationGate.amountBinds` | 设计 6.4 更严：对外发送也要口令「发送」；付款、删除远手从不执行；没有「自主模式」 |
 | 付款面板/金额用看图复核（自绘界面时按截图里认出的字核对） | `ConfirmationGate.permits(seen=…)`、`core/vision/*` | 远手读不到界面树时门闩不放行，不靠截图核对确认内容 |
-| 定时任务、批量执行、记住路线回放、技能学习、MCP、内置浏览器、沙箱 | `core/agent/BatchRunner.kt`、`core/replay/*`、`core/teach/*`、`core/cap/mcp/*`、`core/cap/web/*` | 不在第一期范围；批量/挂机/群发是明确不做的事 |
+| 定时任务、批量执行、Mika 的刚性回放和技能运行时、MCP、内置浏览器、沙箱 | `core/agent/BatchRunner.kt`、`core/replay/*`、`core/teach/*`、`core/cap/mcp/*`、`core/cap/web/*` | 不搬这些运行时。0.1.20 只在手机上留摘要、偏好/应用经验、以及办成后的路线提纲，见第 6 节；没有宏播放器，也没有把 Mika 源码拷进仓库 |
 
 ## 3. 映射到远手模块
 
@@ -52,7 +52,7 @@
 
 ## 4. 验证情况
 
-- `jvmcheck/run.sh`：桌面 JVM 上跑策略自检（词表、口令、一次性同意、金额核对、安全闸、ref、守卫），不连手机。
+- `jvmcheck/run.sh`：桌面 JVM 上跑策略自检（词表、口令、一次性同意、金额核对、安全闸、ref、守卫、长历史摘要、记事、技能提纲、目标核对），不连手机。
 - 以上模型循环、门闩、守卫都**没有在真机上跑过**：远手无障碍未开、模型 Key 未填，模型路径走不到。
 
 ## 5. 0.1.5 补充：按 ScreenPort 接缝重做主屏 + ESP32
@@ -69,3 +69,16 @@
 
 0.1.4 的「清空没清干净就按右方向键再清一轮」已删除（百度输入法吞右方向键）；现在没清干净直接 VERIFY_FAILED。
 旧的 `policy/OneShotGrant` 已由 `gate/ConfirmationGate` 取代并删除。
+
+## 6. 0.1.20：摘要、记事、提纲、办完前核对
+
+只借鉴「步骤长了要记得住、办成的路可以再参考、说做完要再看一眼屏幕」这层意思。远手仍是 Java，写在 `memory/`，没有拷 `core/replay`、`core/teach` 或任何 Mika 源码，也没有 MCP、技能运行时或宏播放器。
+
+| 行为 | 落点 |
+|---|---|
+| 历史变长后把较早步骤收成「步号、动作、目标或应用、结果、界面」，最近几步留原文。不删步，不用「已省略」裁掉开头。每 15 步的进度用这份摘要 | `memory/StepHistory`，`TaskSession` 交给 `ModelClient.nextAction` |
+| 跨任务记偏好（原话里写明的城市、习惯应用、确认说法）和应用经验（做成的路线、明确失败）。只把和当前这句话、当前前台应用有关的几条放进上下文。密钥、口令串、密码不写盘 | `memory/AgentMemory`、`memory/Sensitive`，文件在应用私有目录 `playbook/memory.json` |
+| 目标核对通过之后留一条提纲：目标、应用、前提、步骤说明。坐标不是依据。下次相似任务把提纲放进上下文，模型按当前屏幕改 | `memory/SkillBook`、`memory/RouteText`，文件 `playbook/skills.json` |
+| `done` 先强制一轮 `goal_check`，对照原话和当前屏幕。只有这轮明确达成才 `DONE`。模型自己写 `done` 或 `goal_check` 不能跳过。`stop` 和取消立刻结束，不再核对 | `memory/GoalCheck`、`memory/DoneGate`，`TaskSession.acceptDone` |
+
+确认闸和「付款永远不执行」没有放宽。仍只操作主屏，无障碍仍只读，没有虚拟屏、没有无障碍点击回退、没有拟人抖动、没有无线调试保活。

@@ -1,4 +1,4 @@
-# 远手（com.yuanhou.hand）第一期前台编排应用 · 0.1.19
+# 远手（com.yuanhou.hand）第一期前台编排应用 · 0.1.20
 
 依据：/workspace/private-phone-assistant-phase1-ble.md。复用 s3-hand-test 已在真机跑通的 GATT 客户端。
 
@@ -9,6 +9,13 @@
 - 桌面自测：`adb shell am start -n com.yuanhou.hand/.ui.MainActivity --ez selftest true`（0.1.13 起首页会转到「设置 › 调试」，在那里点自测框），结果在
   /sdcard/Android/data/com.yuanhou.hand/files/selftest.txt，日志 log.txt
 - 文字指令：`--es say "演练发微信 张三 你好"`（参数里不要有空格以外的 shell 特殊字符）
+
+## 0.1.20：长程里的摘要、记事、技能提纲、办完前核对
+
+- 一次任务里的步骤变长以后，较早的步骤收成结构化摘要（第几步、什么动作、点的是什么或哪个应用、做成没有、当时界面），最近几步仍把原文交给模型。不再把开头裁掉并写「更早的步骤已省略」。每 15 步念的进度用这份摘要。
+- 本机私有目录 `playbook/` 里记两类事，换任务、重启应用还在，不上传：用户原话里写明的偏好（常去的城市、习惯用的应用、确认时怎么说）；某个应用里做成过的路线和明确没做成的坑。下一件相关的事只把用得上的几条放进模型上下文。密钥、口令串、密码不记。设置页不另做管理界面。
+- 目标核对通过、任务确实办完时，留下一条技能提纲：目标、涉及的应用、前提、步骤说明。不把点击坐标当成可以回放的宏，也不另做播放器。以后遇到相似的事，把提纲放进上下文，由模型按当前屏幕改。
+- 模型说 `done` 不会马上结束。本机再问一轮，对照用户原话和当前屏幕；核对明确达成才算办完，没达成就写进步骤继续办。模型不能自己跳过这轮。`stop` 和用户取消仍立刻停下，不再核对。发送、删除、提交、下单仍要口令；付款永远不执行，停在付款页是 NEEDS_HUMAN。
 
 ## 0.1.19：长程任务（学 Mika 的循环）
 
@@ -129,7 +136,8 @@
 - service：OrchestratorService（前台服务、常驻通知、心跳看门狗、2–5 s 重连、SET_SCREEN）
 - screen：ReadonlyAccessibilityService（只读，默认未开启）/ ScreenSnapshot / ScreenCapture（MediaProjection，需本人同意）
 - policy：OperationGuard（无效果、兜圈、空白即停）/ ConfirmationPolicy（按钮词表，供 gate/IrreversibleDetector 复用）/ SafetyGuard（密码、验证码、支付密码、解锁页、环境异常即停）
-- model：ModelConfig（空位）/ ModelKeys（Key 解析：设置 → 运行时环境）/ ModelClient（OpenAI / DeepSeek chat/completions，仅在有 Key 且同意后调用）/ ModelAction
+- model：ModelConfig（空位）/ ModelKeys（Key 解析：设置 → 运行时环境）/ ModelClient（OpenAI / DeepSeek chat/completions，仅在有 Key 且同意后调用）/ ModelAction / PromptText
+- memory（0.1.20）：StepHistory（长历史收成结构化摘要）/ GoalCheck、DoneGate（done 前强制核对）/ AgentMemory（偏好和应用经验）/ SkillBook（办成路线的提纲）/ Playbook（本机 playbook/ 目录）
 - session：CallChannel / LocalTextChannel（桌上文字自测，不出声）/ SipCallChannel（内嵌 Liblinphone 5.5.39 的 SIP 用户代理：来电先查两件套、自动接听、下行写文件听写、合成语音在同一通话上行播放）/ CallVoice（只 synthesizeToFile，不外放）/ CallTranscriber（Vosk 离线中文听写）/ SipConfig（本人自己填）/ TaskSession
 - ui：MainActivity / SettingsActivity
 - lan（0.1.9）：LanProtocol（纯 Java：请求解析、口令、网段、JSON）/ LanServer（前台服务里的 3334 HTTP 服务 + NSD）；service/BootReceiver（开机试着启动）
@@ -140,4 +148,4 @@
 - 听写模型（不进 APK）：把 vosk-model-small-cn-0.22 解压为 /sdcard/Android/data/com.yuanhou.hand/files/vosk-model-cn/
 
 ## 对照 Mika
-见 docs/mika-lessons.md。自检（桌面 JVM，不连手机、不调模型）：`sh jvmcheck/run.sh`（PolicyCheck / IntentCheck / GateCheck / PortCheck / LanCheck）
+见 docs/mika-lessons.md。自检（桌面 JVM，不连手机、不调模型）：`sh jvmcheck/run.sh`（PolicyCheck / IntentCheck / GateCheck / PortCheck / LanCheck / WechatCheck / HomeCheck / ModelActionCheck / LongHorizonCheck）
